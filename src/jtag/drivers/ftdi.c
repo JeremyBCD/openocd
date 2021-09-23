@@ -131,6 +131,8 @@ static uint16_t direction;
 static uint16_t jtag_output_init;
 static uint16_t jtag_direction_init;
 
+static bool samd_cold_plug;
+
 static int ftdi_swd_switch_seq(enum swd_special_seq seq);
 
 static struct signal *find_signal_by_name(const char *name)
@@ -644,6 +646,8 @@ static int ftdi_execute_queue(void)
 
 static int ftdi_initialize(void)
 {
+	int retval;
+
 	if (tap_get_tms_path_len(TAP_IRPAUSE, TAP_IRPAUSE) == 7)
 		LOG_DEBUG("ftdi interface using 7 step jtag state transitions");
 	else
@@ -685,7 +689,52 @@ static int ftdi_initialize(void)
 
 	freq = mpsse_set_frequency(mpsse_ctx, jtag_get_speed_khz() * 1000);
 
-	return mpsse_flush(mpsse_ctx);
+	retval = mpsse_flush(mpsse_ctx);
+	if (retval != ERROR_OK) {
+		LOG_ERROR("Flush error before reset");
+		return retval;
+	}
+
+	if (samd_cold_plug) {
+		struct signal *sig_nsrst = find_signal_by_name("nSRST");
+		struct signal *sig_clk = find_signal_by_name("SWD_CLK");
+
+		/* Hold nSRST for 50ms */
+		retval = ftdi_set_signal(sig_nsrst, '1');
+		if (retval != ERROR_OK) {
+			return retval;
+		}
+		retval = mpsse_flush(mpsse_ctx);
+		if (retval != ERROR_OK) {
+			return retval;
+		}
+		usleep(50000);
+
+		/* Take nSRST for 3ms. */
+		retval = ftdi_set_signal(sig_nsrst, '0');
+		if (retval != ERROR_OK) {
+			return retval;
+		}
+		retval = mpsse_flush(mpsse_ctx);
+		if (retval != ERROR_OK) {
+			return retval;
+		}
+		usleep(3000);
+
+		/* Put nSRST high. */
+		retval = ftdi_set_signal(sig_nsrst, '1');
+		if (retval != ERROR_OK) {
+			return retval;
+		}
+		retval = mpsse_flush(mpsse_ctx);
+		if (retval != ERROR_OK) {
+			return retval;
+		}
+
+		LOG_INFO("SAMD reset cold-plug sequence issued, device is held in reset. v4");
+	}
+
+	return retval;
 }
 
 static int ftdi_quit(void)
@@ -931,6 +980,12 @@ COMMAND_HANDLER(ftdi_handle_tdo_sample_edge_command)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(ftdi_handle_samd_cold_plug_command)
+{
+	samd_cold_plug = true;
+	return ERROR_OK;
+}
+
 static const struct command_registration ftdi_command_handlers[] = {
 	{
 		.name = "ftdi_device_desc",
@@ -998,6 +1053,14 @@ static const struct command_registration ftdi_command_handlers[] = {
 			"- default is rising-edge (Setting to falling-edge may "
 			"allow signalling speed increase)",
 		.usage = "(rising|falling)",
+	},
+	{
+		.name = "ftdi_init_samd_cold_plug",
+		.handler = &ftdi_handle_samd_cold_plug_command,
+		.mode = COMMAND_CONFIG,
+		.help = "Issues SAMD/R/L/C cold-plug sequence during init to "
+			"attach to a secured device.",
+		.usage = "",
 	},
 	COMMAND_REGISTRATION_DONE
 };

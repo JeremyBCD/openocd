@@ -224,6 +224,7 @@ static uint8_t output_pins = SWJ_PIN_SRST | SWJ_PIN_TRST;
 
 static struct cmsis_dap *cmsis_dap_handle;
 
+static bool samd_cold_plug;
 
 static int cmsis_dap_open(void)
 {
@@ -1022,6 +1023,18 @@ static int cmsis_dap_init(void)
 	}
 	LOG_INFO("CMSIS-DAP: Interface ready");
 
+	if (samd_cold_plug) {
+		retval = cmsis_dap_cmd_DAP_SWJ_Pins(0, SWJ_PIN_SRST | SWJ_PIN_TCK, 100, NULL);
+		if (retval != ERROR_OK)
+			return ERROR_FAIL;
+
+		retval = cmsis_dap_cmd_DAP_SWJ_Pins(SWJ_PIN_SRST, SWJ_PIN_SRST | SWJ_PIN_TCK, 100, NULL);
+		if (retval != ERROR_OK)
+			return ERROR_FAIL;
+
+		LOG_INFO("SAMD reset cold-plug sequence issued, device is held in reset.");
+	}
+
 	return ERROR_OK;
 }
 
@@ -1661,6 +1674,12 @@ COMMAND_HANDLER(cmsis_dap_handle_backend_command)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(cmsis_dap_handle_samd_cold_plug_command)
+{
+	samd_cold_plug = true;
+	return ERROR_OK;
+}
+
 static const struct command_registration cmsis_dap_subcommand_handlers[] = {
 	{
 		.name = "info",
@@ -1708,6 +1727,14 @@ static const struct command_registration cmsis_dap_command_handlers[] = {
 		.mode = COMMAND_CONFIG,
 		.help = "set the communication backend to use (USB bulk or HID).",
 		.usage = "(auto | usb_bulk | hid)",
+	},
+	{
+		.name = "cmsis_dap_init_samd_cold_plug",
+		.handler = &cmsis_dap_handle_samd_cold_plug_command,
+		.mode = COMMAND_CONFIG,
+		.help = "Issues SAMD/R/L/C cold-plug sequence during init to "
+			"attach to a secured device.",
+		.usage = "",
 	},
 #if BUILD_CMSIS_DAP_USB
 	{

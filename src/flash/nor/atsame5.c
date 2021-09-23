@@ -782,6 +782,27 @@ COMMAND_HANDLER(same5_handle_chip_erase_command)
 }
 
 
+COMMAND_HANDLER(same5_handle_chip_erase_secured_command)
+{
+	struct target *target = get_current_target(CMD_CTX);
+	if (!target)
+		return ERROR_FAIL;
+
+	/* Note: Not writing to SAME5_PAC here, causes errors and not necessary on
+	 * secured chip. */
+	 
+	/* Tell the DSU to perform a full chip erase.  It takes about 240ms to
+	 * perform the erase. */
+	int res = target_write_u8(target, SAMD_DSU + SAMD_DSU_CTRL_EXT, (1<<4));
+	if (res == ERROR_OK)
+		command_print(CMD, "chip erase started");
+	else
+		command_print(CMD, "write to DSU CTRL failed");
+
+	return res;
+}
+
+
 COMMAND_HANDLER(same5_handle_userpage_command)
 {
 	int res = ERROR_OK;
@@ -826,6 +847,33 @@ COMMAND_HANDLER(same5_handle_userpage_command)
 		return res2;
 }
 
+COMMAND_HANDLER(same5_handle_set_security_command)
+{
+	int res = ERROR_OK;
+	struct target *target = get_current_target(CMD_CTX);
+
+	if (CMD_ARGC < 1 || (CMD_ARGC >= 1 && (strcmp(CMD_ARGV[0], "enable")))) {
+		command_print(CMD, "supply the \"enable\" argument to proceed.");
+		return ERROR_COMMAND_SYNTAX_ERROR;
+	}
+
+	if (target) {
+		if (target->state != TARGET_HALTED) {
+			LOG_ERROR("Target not halted");
+			return ERROR_TARGET_NOT_HALTED;
+		}
+
+		res = same5_issue_nvmctrl_command(target, SAME5_NVM_CMD_SSB);
+
+		/* Check (and clear) error conditions */
+		if (res == ERROR_OK)
+			command_print(CMD, "chip secured on next power-cycle");
+		else
+			command_print(CMD, "failed to secure chip");
+	}
+
+	return res;
+}
 
 COMMAND_HANDLER(same5_handle_bootloader_command)
 {
@@ -916,6 +964,14 @@ static const struct command_registration same5_exec_command_handlers[] = {
 			"Erase feature in the Device Service Unit (DSU).",
 	},
 	{
+		.name = "chip-erase-secured",
+		.usage = "",
+		.handler = same5_handle_chip_erase_secured_command,
+		.mode = COMMAND_EXEC,
+		.help = "Clear security bit by bulk-erasing. Uses the Chip-"
+			"Erase feature in the Device Service Unit (DSU).",
+	},
+	{
 		.name = "bootloader",
 		.usage = "[size_in_bytes]",
 		.handler = same5_handle_bootloader_command,
@@ -934,6 +990,16 @@ static const struct command_registration same5_exec_command_handlers[] = {
 			"to prevent changes at positions where the bitvalue is zero. "
 			"For security reasons the reserved-bits are masked out "
 			"in background and therefore cannot be changed.",
+	},
+	{
+		.name = "set-security",
+		.handler = same5_handle_set_security_command,
+		.usage = "'enable'",
+		.mode = COMMAND_EXEC,
+		.help = "Secure the chip's Flash by setting the Security Bit."
+			"This makes it impossible to read the Flash contents."
+			"The only way to undo this is to issue the "
+			"chip-erase-secured command.",
 	},
 	COMMAND_REGISTRATION_DONE
 };
